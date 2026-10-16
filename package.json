@@ -1,0 +1,21 @@
+{
+  "name": "dsh-session-metrics",
+  "version": "0.1.0",
+  "license": "MIT",
+  "author": "fegnze",
+  "icon": "./icon.svg",
+  "keywords": ["dsh-plugin", "deepseek-harness", "metrics", "session", "observability"],
+  "repository": { "type": "git", "url": "git+https://github.com/fegnze/dsh-session-metrics.git" },
+  "homepage": "https://github.com/fegnze/dsh-session-metrics#readme",
+  "bugs": { "url": "https://github.com/fegnze/dsh-session-metrics/issues" },
+  "publishConfig": { "access": "public", "registry": "https://registry.npmjs.org/" },
+  "type": "module",
+  "description": "替换输入框下方统计栏：Token、上下文、缓存、模型与工具耗时、轮次、步数，明细悬浮显示",
+  "exports": { ".": "./src/host.mjs", "./client": "./src/client.js", "./metrics": "./src/metrics.mjs", "./package.json": "./package.json" },
+  "files": ["src", "icon.svg", "cordis.patch.yml", "README.md", "docs/zh.md"],
+  "peerDependencies": { "@deepseek-ai/dsh-app-boot": "0.2.0-rc.2" },
+  "peerDependenciesMeta": { "@deepseek-ai/dsh-app-boot": { "optional": true } },
+  "engines": { "node": ">=22", "dsh": "0.2.0-rc.2" },
+  "dsh": { "manifestVersion": 1, "bundle": { "patch": "./cordis.patch.yml" }, "client": { "platform": "web", "inject": ["@deepseek-ai/dsh-client-ui-slots", "@deepseek-ai/dsh-client-ui-conversation"] } },
+  "scripts": { "test": "node --test test/*.test.mjs" }
+}

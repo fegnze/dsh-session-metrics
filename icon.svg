@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" fill="none">
+  <defs>
+    <linearGradient id="arc" x1="46" y1="46" x2="210" y2="150" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#00E5FA"/><stop offset=".34" stop-color="#37BDFA"/><stop offset=".64" stop-color="#A2A5FA"/><stop offset=".84" stop-color="#EAC8FA"/><stop offset="1" stop-color="#FFF5F5"/>
+    </linearGradient>
+    <linearGradient id="bar" x1="86" y1="128" x2="172" y2="204" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#00E5FA"/><stop offset=".38" stop-color="#3FB9FA"/><stop offset=".7" stop-color="#A2A5FA"/><stop offset="1" stop-color="#EAC8FA"/>
+    </linearGradient>
+    <radialGradient id="pearl" cx="0" cy="0" r="1" gradientTransform="translate(150 108) rotate(38) scale(88 58)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF1FF" stop-opacity=".8"/><stop offset="1" stop-color="#FFF1FF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <path d="M52 150 A 78 78 0 0 1 204 150" stroke="url(#arc)" stroke-width="24" stroke-linecap="round" fill="none"/>
+  <rect x="84" y="158" width="24" height="46" rx="12" fill="url(#bar)"/>
+  <rect x="116" y="132" width="24" height="72" rx="12" fill="url(#bar)" opacity=".94"/>
+  <rect x="148" y="170" width="24" height="34" rx="12" fill="url(#bar)" opacity=".88"/>
+  <ellipse cx="128" cy="186" rx="70" ry="16" fill="url(#pearl)"/>
+</svg>
