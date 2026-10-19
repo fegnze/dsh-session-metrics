@@ -34,6 +34,8 @@ export function emptyAccumulator() {
     currentTurn: null,
     currentTurnStartedAt: null,
     lastTurnMs: null,
+    currentTurnLlmMs: 0,
+    lastTurnLlmMs: null,
   };
 }
 
@@ -116,6 +118,7 @@ export function foldEvent(accumulator, event) {
       accumulator.running = true;
       accumulator.currentTurn = finite(data.turn);
       accumulator.currentTurnStartedAt = time;
+      accumulator.currentTurnLlmMs = 0;
       accumulator.openStep = null;
       if (accumulator.firstTurnStartAt === null) accumulator.firstTurnStartAt = time;
       break;
@@ -123,6 +126,7 @@ export function foldEvent(accumulator, event) {
     case 'turn/end': {
       accumulator.running = false;
       if (accumulator.currentTurnStartedAt !== null) accumulator.lastTurnMs = Math.max(0, time - accumulator.currentTurnStartedAt);
+      accumulator.lastTurnLlmMs = accumulator.currentTurnLlmMs;
       accumulator.lastTurnEndAt = time;
       accumulator.currentTurn = null;
       accumulator.currentTurnStartedAt = null;
@@ -147,7 +151,9 @@ export function foldEvent(accumulator, event) {
       const { first, last } = streamTimes(data.stream);
       const completed = time;
       if (open && open.startedAt !== null) {
-        accumulator.llmMs += Math.max(0, completed - open.startedAt);
+        const ms = Math.max(0, completed - open.startedAt);
+        accumulator.llmMs += ms;
+        accumulator.currentTurnLlmMs += ms;
         if (first !== null) {
           accumulator.ttftMs += Math.max(0, first - open.startedAt);
           accumulator.ttftSteps += 1;
@@ -193,6 +199,15 @@ export function snapshot(accumulator, now = Date.now()) {
   const latencyMs = accumulator.firstTurnStartAt !== null && accumulator.lastTurnEndAt !== null
     ? Math.max(0, accumulator.lastTurnEndAt - accumulator.firstTurnStartAt)
     : 0;
+  // Model time of one turn: the running turn while it is open (its in-flight
+  // step included, mirroring how the whole-log figure charges a step), the
+  // most recently closed turn otherwise. A turn with no assembled message
+  // charges nothing, exactly like `llmMs`.
+  const chargedTurnLlmMs = accumulator.running ? accumulator.currentTurnLlmMs : accumulator.lastTurnLlmMs;
+  const openStep = accumulator.running ? accumulator.openStep : null;
+  const turnLlmMs = chargedTurnLlmMs === null
+    ? null
+    : Math.round(openStep && openStep.startedAt !== null ? chargedTurnLlmMs + Math.max(0, now - openStep.startedAt) : chargedTurnLlmMs);
   return {
     turns: accumulator.turns,
     steps: accumulator.steps,
@@ -200,6 +215,7 @@ export function snapshot(accumulator, now = Date.now()) {
     toolMs: Math.round(toolMs),
     tools,
     llmMs: Math.round(accumulator.llmMs),
+    turnLlmMs,
     ttftMs: accumulator.ttftSteps > 0 ? Math.round(accumulator.ttftMs / accumulator.ttftSteps) : null,
     ttftCoveredSteps: accumulator.ttftSteps,
     decodeMs: Math.round(accumulator.decodeMs),

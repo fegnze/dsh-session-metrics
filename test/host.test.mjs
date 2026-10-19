@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createTracker, validSessionId } from '../src/tracker.mjs';
-import { sessionIdFrom, trusted } from '../src/host.mjs';
+import { apply, sessionIdFrom, trusted } from '../src/host.mjs';
 
 const event = (type, seq, time, data = {}) => ({ type, seq, time, data });
 
@@ -80,4 +80,34 @@ test('the session id is read from the query and rejected when malformed', () => 
   assert.equal(sessionIdFrom('/myspace-session-metrics/api?sessionId=session-42'), 'session-42');
   assert.equal(sessionIdFrom('/myspace-session-metrics/api'), null);
   assert.equal(sessionIdFrom('/myspace-session-metrics/api?sessionId=' + encodeURIComponent('../x')), null);
+});
+
+test('the route serves the turn-scoped model time alongside the whole-log figures', () => {
+  const sessions = store();
+  sessions.seed('session-1', [
+    event('turn/start', 1, 1000, { turn: 1 }),
+    event('step/start', 2, 1100, { turn: 1, step: 1 }),
+    event('assistant/message', 3, 3100, { turn: 1, step: 1, stream: [] }),
+    event('step/end', 4, 3150, { turn: 1, step: 1 }),
+  ]);
+  let handler = null;
+  const ctx = {
+    sessions,
+    effect: callback => callback(),
+    on: () => () => {},
+    webServer: { register: spec => { handler = spec.handler; return () => {}; } },
+  };
+  apply(ctx);
+  assert.equal(typeof handler, 'function');
+  const headers = {};
+  let body = null;
+  handler(
+    { socket: { remoteAddress: '127.0.0.1' }, headers: { host: '127.0.0.1:19387', 'x-dsh-session-metrics': '1' }, method: 'GET', url: '/myspace-session-metrics/api?sessionId=session-1' },
+    { setHeader: (name, value) => { headers[name] = value; }, end: chunk => { body = chunk; } },
+  );
+  const payload = JSON.parse(body);
+  assert.equal(payload.state, 'ready');
+  assert.equal(payload.metrics.llmMs, 2000);
+  assert.equal(payload.metrics.turnLlmMs, 2000);
+  assert.equal(headers['X-Content-Type-Options'], 'nosniff');
 });

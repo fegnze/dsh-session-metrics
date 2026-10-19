@@ -44,12 +44,47 @@ function dockCell(plugin) {
   };
   assert.deepEqual(plugin.inject, ['slots']);
   plugin.apply(ctx);
-  assert.equal(cells.length, 1, 'exactly one dock cell is registered');
+  assert.deepEqual(cells.map(cell => cell.id), ['stats', 'activity', 'usage'], 'covers both legacy and split shipped statistics, without touching other dock cells');
+  for (const cell of cells.slice(1)) {
+    assert.equal(cell.name, 'conversation.composer.dock');
+    assert.ok(cell.priority < 0, `${cell.id} shadows its shipped cell`);
+    assert.equal(cell.component({}), null, `${cell.id} renders no duplicate metrics`);
+  }
   assert.equal(cells[0].name, 'conversation.composer.dock');
   assert.equal(cells[0].id, 'stats', 'takes over the shipped stats cell');
   assert.ok(cells[0].priority < 0, 'shadows the shipped cell (lowest priority renders)');
   return cells[0].component;
 }
+
+test('dock takeover is declaration-scoped and releases every shipped cell on teardown', async () => {
+  const plugin = await loadClient();
+  const { styles } = browser();
+  const effects = [];
+  const active = new Set();
+  let install;
+  plugin.apply({
+    effect: callback => { effects.push(callback()); },
+    slots: {
+      inject: (key, callback) => {
+        assert.equal(key, 'conversation.composer.dock');
+        install = callback;
+      },
+      register: options => {
+        active.add(options.id);
+        return () => active.delete(options.id);
+      },
+    },
+  });
+  assert.equal(active.size, 0, 'waits for the owning declaration');
+  for (let epoch = 0; epoch < 2; epoch++) {
+    const disposers = install();
+    assert.deepEqual([...active], ['stats', 'activity', 'usage']);
+    for (const dispose of [...disposers].reverse()) dispose();
+    assert.equal(active.size, 0, 'collapse/unload releases all three overrides');
+  }
+  for (const dispose of effects.reverse()) dispose();
+  assert.equal(styles[0].removed, true, 'unload restores the legacy context meter CSS too');
+});
 
 const intervals = new Set();
 const realSetInterval = globalThis.setInterval;
@@ -97,6 +132,7 @@ const hostMetrics = {
   usage: { inputTokens: 1500, outputTokens: 4200, cacheReadTokens: 8500, cacheWriteTokens: 0, total: 14200, billedInput: 10000, cacheHitPercent: 85 },
   running: false,
   currentTurnElapsedMs: null,
+  turnLlmMs: 21000,
   lastTurnMs: 21000,
   latencyMs: 61000,
   pendingToolCalls: 0,
@@ -123,14 +159,33 @@ const projections = {
 };
 const useProjection = key => projections[key];
 
-test('the row shows billed tokens, context, cache hit, model time, tool time, turns and steps from the shipped projections', async () => {
+test('the row shows billed tokens, context, cache hit, model time, this turn model time, tool time, turns and steps from the shipped projections', async () => {
   const plugin = await loadClient();
   const calls = [];
   browser({ fetch: okFetch({ state: 'ready', metrics: hostMetrics }, calls) });
   const { tree } = await mount(dockCell(plugin), { sessionId: 'session-abc', useProjection });
   const strings = text(tree).filter(part => part !== '·').join(' | ');
-  assert.equal(strings, 'Token 82M | 上下文 37% | 缓存 99.7% | 模型 20m08s | 工具 11m13s | 2 轮 | 353 步');
-  assert.equal(calls.length, 0, 'the closed row never polls the Host when projections exist');
+  assert.equal(strings, 'Token 82M | 上下文 37% | 缓存 99.7% | 模型 20m08s | 本轮模型 21.0s | 工具 11m13s | 2 轮 | 353 步');
+  assert.equal(calls.length, 1, 'the row reads the Host once for the turn-scoped figure projections lack');
+  assert.equal(calls[0].headers['X-DSH-Session-Metrics'], '1');
+});
+
+test('a running turn shows its own model time beside the whole-log model time', async () => {
+  const plugin = await loadClient();
+  browser({ fetch: okFetch({ state: 'ready', metrics: { ...hostMetrics, running: true, currentTurnElapsedMs: 95000, turnLlmMs: 9000 } }) });
+  const { tree } = await mount(dockCell(plugin), { sessionId: 'session-abc', useProjection });
+  const strings = text(tree).filter(part => part !== '·').join(' | ');
+  assert.ok(strings.includes('模型 20m08s'), `whole-log model time missing: ${strings}`);
+  assert.ok(strings.includes('本轮模型 9.0s'), `turn model time missing: ${strings}`);
+});
+
+test('without a turn figure the row omits the turn item instead of inventing one', async () => {
+  const plugin = await loadClient();
+  const metrics = { ...hostMetrics, turnLlmMs: null };
+  browser({ fetch: okFetch({ state: 'ready', metrics }) });
+  const { tree } = await mount(dockCell(plugin), { sessionId: 'session-abc', useProjection });
+  const strings = text(tree).filter(part => part !== '·').join(' | ');
+  assert.ok(!strings.includes('本轮模型'), `invented turn model time: ${strings}`);
 });
 
 test('the hover panel reads in compact units and shares, without latency rows', async () => {
@@ -142,6 +197,7 @@ test('the hover panel reads in compact units and shares, without latency rows', 
   findAnchor(root).props.onMouseEnter();
   const strings = text(await harness.tick(8)).join(' | ');
   for (const gone of ['首字均值', '解码速度', '上一轮耗时']) assert.ok(!strings.includes(gone), `still shows ${gone}`);
+  assert.ok(strings.includes('本轮模型'), `turn-scoped model time missing from the panel: ${strings}`);
   assert.ok(strings.includes('37% · 74.0k / 200k'), `context missing: ${strings}`);
   assert.ok(strings.includes('20% · 15.0k'), `context share missing: ${strings}`);
   assert.ok(strings.includes('82M'), `token total missing: ${strings}`);
@@ -164,14 +220,18 @@ test('without projections the row falls back to the Host reading', async () => {
   browser({ fetch: okFetch({ state: 'ready', sessionId: 'session-abc', inferred: false, metrics: hostMetrics }, calls) });
   const { tree } = await mount(dockCell(plugin), { sessionId: 'session-abc' });
   const strings = text(tree).filter(part => part !== '·').join(' | ');
-  assert.equal(strings, 'Token 14.2k | 缓存 85% | 模型 45.0s | 工具 5.2s | 3 轮 | 12 步');
+  assert.equal(strings, 'Token 14.2k | 缓存 85% | 模型 45.0s | 本轮模型 21.0s | 工具 5.2s | 3 轮 | 12 步');
   assert.equal(calls[0].headers['X-DSH-Session-Metrics'], '1');
   assert.match(calls[0].url, /sessionId=session-abc/);
 });
 
 test('an empty Session renders nothing', async () => {
   const plugin = await loadClient();
-  browser({ fetch: okFetch({ state: 'ready', metrics: hostMetrics }) });
+  const emptyHost = {
+    ...hostMetrics, turns: 0, steps: 0, toolCalls: 0, toolMs: 0, tools: [], llmMs: 0, turnLlmMs: null, lastTurnMs: null, latencyMs: 0,
+    usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, total: 0, billedInput: 0, cacheHitPercent: null },
+  };
+  browser({ fetch: okFetch({ state: 'ready', metrics: emptyHost }) });
   const empty = key => key === 'sessionStats' ? { turns: 0, steps: 0, llmMs: 0, toolMs: 0, ttftMs: 0, ttftSteps: 0, decodeMs: 0, decodeTokens: 0 } : undefined;
   const { tree } = await mount(dockCell(plugin), { sessionId: 'session-abc', useProjection: empty });
   assert.equal(tree, null);

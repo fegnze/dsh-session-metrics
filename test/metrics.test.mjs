@@ -20,6 +20,7 @@ test('turn, step and model timings come from the log clock', () => {
   assert.equal(s.turns, 1);
   assert.equal(s.steps, 1);
   assert.equal(s.llmMs, 2000);
+  assert.equal(s.turnLlmMs, 2000);
   assert.equal(s.ttftMs, 200);
   assert.equal(s.ttftCoveredSteps, 1);
   assert.equal(s.decodeMs, 1700);
@@ -85,6 +86,43 @@ test('a running turn reports its open-start window without inventing time', () =
   assert.equal(s.currentTurn, 3);
   assert.equal(s.currentTurnElapsedMs, 3500);
   assert.equal(s.lastTurnMs, null);
+  assert.equal(s.turnLlmMs, 0);
+});
+
+test('turn model time covers the running turn only, joining the whole-log total', () => {
+  const acc = fold([
+    event('turn/start', 1, 0, { turn: 1 }),
+    event('step/start', 2, 100, { turn: 1, step: 1 }),
+    event('assistant/message', 3, 1100, { turn: 1, step: 1, stream: [] }),
+    event('step/end', 4, 1200, { turn: 1, step: 1 }),
+    event('turn/end', 5, 1500, { turn: 1, reason: { kind: 'completed' } }),
+  ]);
+  assert.equal(snapshot(acc, 9000).turnLlmMs, 1000);
+  assert.equal(snapshot(acc, 9000).llmMs, 1000, 'one turn: both figures agree');
+
+  foldEvents(acc, [
+    event('turn/start', 6, 2000, { turn: 2 }),
+    event('step/start', 7, 2100, { turn: 2, step: 1 }),
+    event('assistant/message', 8, 2600, { turn: 2, step: 1, stream: [] }),
+    event('step/end', 9, 2700, { turn: 2, step: 1 }),
+  ]);
+  // Closed steps of the open turn only: the first turn no longer adds in.
+  assert.equal(snapshot(acc, 9000).turnLlmMs, 500);
+  assert.equal(snapshot(acc, 9000).llmMs, 1500);
+
+  // An open step counts as elapsed model time until its message assembles.
+  foldEvents(acc, [event('step/start', 10, 3000, { turn: 2, step: 2 })]);
+  assert.equal(snapshot(acc, 4000).turnLlmMs, 1500);
+  foldEvents(acc, [
+    event('assistant/message', 11, 4000, { turn: 2, step: 2, stream: [] }),
+    event('step/end', 12, 4050, { turn: 2, step: 2 }),
+  ]);
+  assert.equal(snapshot(acc, 9000).turnLlmMs, 1500, 'the charged step replaces the live estimate');
+  assert.equal(snapshot(acc, 9000).llmMs, 2500);
+
+  foldEvents(acc, [event('turn/end', 13, 4100, { turn: 2, reason: { kind: 'completed' } })]);
+  assert.equal(snapshot(acc, 9000).turnLlmMs, 1500, 'an idle row keeps the last closed turn');
+  assert.equal(snapshot(acc, 9000).running, false);
 });
 
 test('streamTimes reads chunk and delta records and tolerates garbage', () => {

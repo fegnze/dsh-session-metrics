@@ -2,9 +2,12 @@ window.__ModuleLoader__.load({ id: 'dsh-session-metrics', factory: require => {
   const React = require('react'), h = React.createElement;
   const { createPortal } = require('react-dom');
   const ID = 'dsh-session-metrics';
-  // Shadow the shipped `stats` cell: same id at a lower priority renders instead
-  // of it (lowest wins), and disabling this plugin hands the cell back to DSH.
+  // Older DSH uses `stats`; newer DSH splits it into `activity` and `usage`.
+  // Shadow only these owned cells (lowest priority wins). Context disposal
+  // restores the shipped entries when this plugin unloads.
   const CELL = 'stats', PRIORITY = -1;
+  const SHIPPED_SPLIT_CELLS = ['activity', 'usage'];
+  const EmptyCell = () => null;
   const ROUTE = '/myspace-session-metrics/api';
   const POLL_MS = 2500;
   const HEADER = { 'X-DSH-Session-Metrics': '1' };
@@ -61,19 +64,21 @@ window.__ModuleLoader__.load({ id: 'dsh-session-metrics', factory: require => {
       latencyMs: num(h0.latencyMs) > 0 ? h0.latencyMs : null,
       running: Boolean(h0.running),
       currentTurnElapsedMs: num(h0.currentTurnElapsedMs),
+      turnLlmMs: num(h0.turnLlmMs),
     };
   }
 
   const GaugeIcon = () => h('svg', { viewBox: '0 0 16 16', width: 14, height: 14, 'aria-hidden': true, fill: 'none', stroke: 'currentColor', strokeWidth: 1.4, strokeLinecap: 'round', strokeLinejoin: 'round' },
     h('path', { d: 'M2.5 11.5a5.5 5.5 0 1 1 11 0' }), h('path', { d: 'M8 11.5 10.6 7' }));
 
-  /** The seven always-visible figures, in the owner's reading order. */
+  /** The always-visible figures, in the owner's reading order. */
   function rowParts(m) {
     const parts = [];
     if (m.usage) parts.push(`Token ${formatCount(m.usage.total)}`);
     if (m.context) parts.push(`上下文 ${m.context.percent}%`);
     if (m.usage && m.usage.cache !== null) parts.push(`缓存 ${m.usage.cache}%`);
     if (m.llmMs !== null && m.llmMs > 0) parts.push(`模型 ${formatDuration(m.llmMs)}`);
+    if (m.turnLlmMs !== null && m.turnLlmMs > 0) parts.push(`本轮模型 ${formatDuration(m.turnLlmMs)}`);
     if (m.toolMs !== null && m.toolMs > 0) parts.push(`工具 ${formatDuration(m.toolMs)}`);
     if (m.turns !== null) parts.push(`${m.turns} 轮`);
     if (m.steps !== null) parts.push(`${formatCount(m.steps)} 步`);
@@ -105,6 +110,7 @@ window.__ModuleLoader__.load({ id: 'dsh-session-metrics', factory: require => {
       h('div', { key: 'rule', className: 'dsm-rule', 'aria-hidden': true }),
       dl('time', [
         m.toolCalls !== null ? ['工具调用', `${m.toolCalls} 次${failed ? ` · ${failed} 失败` : ''}`] : null,
+        m.turnLlmMs !== null ? ['本轮模型', formatDuration(m.turnLlmMs)] : null,
         m.latencyMs !== null ? ['会话跨度', formatDuration(m.latencyMs)] : null,
       ]),
     ];
@@ -143,11 +149,14 @@ window.__ModuleLoader__.load({ id: 'dsh-session-metrics', factory: require => {
     }
   }
 
-  /** Host reading, polled only while `active`. */
-  function useHost(sessionId, active) {
+  /**
+   * Host reading, polled while the page is visible: the row carries the
+   * current turn's model time, which only the Host folds, so the poll cannot
+   * wait for the panel to open.
+   */
+  function useHost(sessionId) {
     const [reading, setReading] = React.useState(null);
     React.useEffect(() => {
-      if (!active) return undefined;
       const query = typeof sessionId === 'string' && sessionId.length > 0 ? `?sessionId=${encodeURIComponent(sessionId)}` : '';
       let stopped = false, pending = false;
       const controller = new AbortController();
@@ -167,7 +176,7 @@ window.__ModuleLoader__.load({ id: 'dsh-session-metrics', factory: require => {
       window.addEventListener('focus', load);
       document.addEventListener('visibilitychange', load);
       return () => { stopped = true; controller.abort(); clearInterval(timer); window.removeEventListener('focus', load); document.removeEventListener('visibilitychange', load); };
-    }, [sessionId, active]);
+    }, [sessionId]);
     return reading;
   }
 
@@ -220,8 +229,9 @@ window.__ModuleLoader__.load({ id: 'dsh-session-metrics', factory: require => {
     const anchorRef = React.useRef(null);
     const panelRef = React.useRef(null);
     const closeTimer = React.useRef(null);
-    // Without the shipped projections the row itself must come from the Host.
-    const host = useHost(sessionId, open || stats === undefined);
+    // Without the shipped projections the row itself must come from the Host;
+    // the current turn's model time always does.
+    const host = useHost(sessionId);
     const pos = usePanel(open, setOpen, anchorRef, panelRef);
     const m = combine(stats, usage, host && host.metrics);
     m.context = context(project('contextPressure'), project('contextBreakdown'));
@@ -302,10 +312,16 @@ window.__ModuleLoader__.load({ id: 'dsh-session-metrics', factory: require => {
       document.head.appendChild(style);
       return () => style.remove();
     });
-    ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register(
-      { name: 'conversation.composer.dock', id: CELL, priority: PRIORITY, order: 0, label: '会话指标' },
-      Cell,
-    ));
+    ctx.slots.inject('conversation.composer.dock', () => [
+      ctx.slots.register(
+        { name: 'conversation.composer.dock', id: CELL, priority: PRIORITY, order: 0, label: '会话指标' },
+        Cell,
+      ),
+      ...SHIPPED_SPLIT_CELLS.map(id => ctx.slots.register(
+        { name: 'conversation.composer.dock', id, priority: PRIORITY },
+        EmptyCell,
+      )),
+    ]);
   }
   return { inject: ['slots'], apply };
 } });
