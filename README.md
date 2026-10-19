@@ -2,7 +2,7 @@
 
 English | [中文](<docs/zh.md>)
 
-`dsh-session-metrics` is a community desktop plugin (not an official DeepSeek product) for DSH 0.2.0-rc.2. It replaces DSH's shipped statistics band below the composer with one row showing billed tokens, context usage, cache hit, model time, tool time, turns and steps; everything else lives in a hover panel. It modifies no core code, writes no files, and starts no separate service.
+`dsh-session-metrics` is a community desktop plugin (not an official DeepSeek product) for DSH 0.2.0-rc.2 and 0.2.1-rc.2. It replaces DSH's shipped statistics band below the composer with one row showing billed tokens, context usage, cache hit, model time, tool time, turns and steps; everything else lives in a hover panel. It modifies no core code, writes no files, and starts no separate service.
 
 ## Behavior
 
